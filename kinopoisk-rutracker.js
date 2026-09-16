@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Kinopoisk RuTracker
 // @namespace    http://tampermonkey.net/
-// @version      0.1.1
-// @description  Search movies from Kinopoisk on RuTracker and watch them in mpv
+// @version      0.1.2
+// @description  Search movies and series from Kinopoisk on RuTracker and watch them in mpv
 // @author       axtgr
 // @match        https://www.kinopoisk.ru/*
 // @match        https://rutracker.org/*
@@ -27,10 +27,12 @@
 	const WATCH_URL_PREFIX = "mpv://";
 	const MIN_SIZE_GB = 4;
 	const MAX_SIZE_GB = 10;
+	const SERIES_MIN_SIZE_GB = 3;
+	const SERIES_MAX_SIZE_GB = 120;
 	const SEARCH_REQUEST_KEY = "kr-search-request";
 	const SEARCH_RESPONSE_KEY = "kr-search-response";
 	const SEARCH_TAB_TIMEOUT_MS = 45000;
-	const FORUM_IDS = new Set([
+	const MOVIE_FORUM_IDS = new Set([
 		// Movies
 		22, 941, 1666, 376, 106,
 		// Movies/Foreign
@@ -50,6 +52,8 @@
 		352, 549, 1213, 2109,
 		// Movies (cartoons)
 		4, 208, 539, 822, 181,
+	]);
+	const SERIES_FORUM_IDS = new Set([
 		// TV (cartoon series)
 		921, 815, 816, 1460, 498,
 		// TV/Anime
@@ -69,6 +73,7 @@
 		// TV/Foreign (Asian series)
 		2100, 820, 915, 1242, 717, 1939, 2412,
 	]);
+	const FORUM_IDS = new Set([...MOVIE_FORUM_IDS, ...SERIES_FORUM_IDS]);
 
 	const STYLES = `
         #kinopoisk-jackett-container {
@@ -141,9 +146,37 @@
 		return result.MagnetUri || result.Link || result.DownloadLink;
 	}
 
+	function getPageInfo() {
+		let seasonMatch = location.pathname.match(
+			/^\/series\/(\d+)\/season\/(\d+)\/?$/,
+		);
+		if (seasonMatch) {
+			return {
+				id: seasonMatch[1],
+				type: "series",
+				season: Number(seasonMatch[2]),
+			};
+		}
+
+		let match = location.pathname.match(/^\/(film|series)\/(\d+)\/?$/);
+		if (!match) return null;
+
+		return {
+			id: match[2],
+			type: match[1] === "series" ? "series" : "film",
+			season: null,
+		};
+	}
+
 	function getFilmId() {
-		let match = location.pathname.match(/^\/film\/(\d+)\/?$/);
-		return match ? match[1] : null;
+		let page = getPageInfo();
+		return page ? page.id : null;
+	}
+
+	function getPageKey(page) {
+		page = page || getPageInfo();
+		if (!page) return "";
+		return page.season ? `${page.id}-s${page.season}` : page.id;
 	}
 
 	function getFilmHeading() {
@@ -177,10 +210,11 @@
 		return $parent || $heading.parentNode;
 	}
 
-	function ensureContainer(filmId) {
+	function ensureContainer(filmId, pageKey) {
 		injectStyles(STYLES);
 
 		let id = filmId || getFilmId() || "";
+		let key = pageKey || getPageKey() || id;
 		let $heading = getFilmHeading();
 		if (!$heading || !$heading.parentNode) return null;
 
@@ -188,7 +222,7 @@
 		if (!$parent) return null;
 
 		let $existing = document.getElementById("kinopoisk-jackett-container");
-		if ($existing && $existing.dataset.filmId === id && $parent.contains($existing)) {
+		if ($existing && $existing.dataset.pageKey === key && $parent.contains($existing)) {
 			return $existing;
 		}
 
@@ -197,6 +231,7 @@
 		let $container = document.createElement("div");
 		$container.id = "kinopoisk-jackett-container";
 		$container.dataset.filmId = id;
+		$container.dataset.pageKey = key;
 		$container.style.color = getComputedStyle($heading).color;
 		$parent.prepend($container);
 
@@ -208,16 +243,16 @@
 		return $container;
 	}
 
-	function renderStatus(message, filmId) {
-		let $container = ensureContainer(filmId);
+	function renderStatus(message, filmId, pageKey) {
+		let $container = ensureContainer(filmId, pageKey);
 		if (!$container) return;
 
 		$container.replaceChildren();
 		$container.textContent = message;
 	}
 
-	function render(results, filmId) {
-		let $container = ensureContainer(filmId);
+	function render(results, filmId, pageKey) {
+		let $container = ensureContainer(filmId, pageKey);
 		if (!$container) return;
 
 		$container.replaceChildren();
@@ -296,7 +331,11 @@
 		let types = Array.isArray(type) ? type : [type];
 		if (
 			types.some(
-				(item) => item === "Movie" || item === "TVSeries" || item === "TVEpisode",
+				(item) =>
+					item === "Movie" ||
+					item === "TVSeries" ||
+					item === "TVSeason" ||
+					item === "TVEpisode",
 			)
 		) {
 			return data;
@@ -322,6 +361,44 @@
 		return null;
 	}
 
+	function extractYear(value) {
+		if (!value) return "";
+		let match = String(value).match(/(?:19|20)\d{2}/);
+		return match ? match[0] : "";
+	}
+
+	function getJsonLdTypes(data) {
+		let type = data && data["@type"];
+		return Array.isArray(type) ? type : [type];
+	}
+
+	function isSeriesType(data) {
+		return getJsonLdTypes(data).some(
+			(item) =>
+				item === "TVSeries" || item === "TVSeason" || item === "TVEpisode",
+		);
+	}
+
+	function unwrapSeriesJson(json) {
+		if (!json) return json;
+		let types = getJsonLdTypes(json);
+		if (!types.includes("TVSeason") && !types.includes("TVEpisode")) {
+			return json;
+		}
+
+		let series = json.partOfSeries;
+		if (!series || !series.name) return json;
+
+		return {
+			...json,
+			name: series.name,
+			alternateName: series.alternateName || json.alternateName,
+			datePublished: series.datePublished || series.startDate || json.datePublished,
+			startDate: series.startDate || json.startDate,
+			url: series.url || json.url,
+		};
+	}
+
 	function parseMovieDataFromDom($heading) {
 		$heading = $heading || getFilmHeading();
 		if (!$heading) return null;
@@ -330,23 +407,32 @@
 			(node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim(),
 		);
 		let name = (nameNode ? nameNode.textContent : $heading.textContent)
-			.replace(/\s*\(\d{4}.*$/, "")
+			.replace(/\s*\((?:\d{4}|сериал).*$/i, "")
 			.trim();
 		if (!name) return null;
 
-		let yearMatch = $heading.textContent.match(/\((\d{4})\)/);
+		let page = getPageInfo();
+		let year = extractYear($heading.textContent);
 		let $alternate = document.querySelector("[itemprop=alternativeHeadline]");
 
 		return {
 			name,
 			alternateName: $alternate && $alternate.textContent.trim(),
-			datePublished: yearMatch ? yearMatch[1] : undefined,
+			year,
+			datePublished: year || undefined,
+			isSeries:
+				(page && page.type === "series") ||
+				/сериал/i.test($heading.textContent),
+			season: page && page.season,
 		};
 	}
 
 	function jsonLdMatchesFilm(movie, filmId, $heading) {
 		if (filmId && movie.url) {
-			return String(movie.url).includes(`/film/${filmId}`);
+			let url = String(movie.url);
+			return (
+				url.includes(`/film/${filmId}`) || url.includes(`/series/${filmId}`)
+			);
 		}
 
 		return Boolean(
@@ -363,8 +449,8 @@
 		let titleHead = document.title.split(/\s+[—–|-]\s+/)[0].trim();
 		if (!titleHead) return false;
 
-		let titleName = titleHead.replace(/\s*\(\d{4}.*$/, "").trim();
-		let headingName = headingText.replace(/\s*\(\d{4}.*$/, "").trim();
+		let titleName = titleHead.replace(/\s*\((?:\d{4}|сериал).*$/i, "").trim();
+		let headingName = headingText.replace(/\s*\((?:\d{4}|сериал).*$/i, "").trim();
 
 		return (
 			(titleName.length > 1 && headingText.includes(titleName)) ||
@@ -374,10 +460,27 @@
 
 	function parseMovieData(filmId, $heading) {
 		$heading = $heading || getFilmHeading();
-		let json = parseJsonLd();
+		let json = unwrapSeriesJson(parseJsonLd());
+		let page = getPageInfo();
 
 		if (json && json.name && jsonLdMatchesFilm(json, filmId, $heading)) {
-			return json;
+			let series = isSeriesType(json) || (page && page.type === "series");
+			let year = series
+				? extractYear(json.startDate) ||
+					extractYear(json.datePublished) ||
+					extractYear($heading && $heading.textContent)
+				: extractYear(json.datePublished) ||
+					extractYear(json.startDate) ||
+					extractYear($heading && $heading.textContent);
+
+			return {
+				name: json.name,
+				alternateName: json.alternateName,
+				year,
+				datePublished: year || json.datePublished,
+				isSeries: series,
+				season: page && page.season,
+			};
 		}
 
 		return parseMovieDataFromDom($heading);
@@ -792,12 +895,18 @@
 		}
 	}
 
-	async function searchRuTracker(
-		{ name, alternateName, datePublished },
-		reportStatus,
-	) {
-		let query = `${name}${alternateName ? " " + alternateName : ""}${datePublished ? " " + datePublished : ""}`;
-		let url = `${RUTRACKER_HOST}/forum/tracker.php?nm=${encodeURIComponent(query)}&o=10&s=2&f=${[...FORUM_IDS].join(",")}`;
+	async function searchRuTracker(titleData, reportStatus) {
+		let { name, alternateName, year, season, isSeries } = titleData;
+		let query = [
+			name,
+			alternateName && alternateName !== name ? alternateName : "",
+			year,
+			season ? `сезон ${season}` : "",
+		]
+			.filter(Boolean)
+			.join(" ");
+		let forumIds = isSeries ? SERIES_FORUM_IDS : FORUM_IDS;
+		let url = `${RUTRACKER_HOST}/forum/tracker.php?nm=${encodeURIComponent(query)}&o=10&s=2&f=${[...forumIds].join(",")}`;
 
 		let payload = await fetchSearchPayload(url, reportStatus);
 		if (payload.error) throw new Error(payload.error);
@@ -805,10 +914,23 @@
 		return enrichWithMagnets(payload.results || [], reportStatus);
 	}
 
-	function normalizeResults(results) {
+	function titleMatchesSeason(title, season) {
+		if (!season || !title) return false;
+		let pattern = new RegExp(
+			`(сезон(?:ы)?\\s*:?\\s*|\\bS)\\s*0*${season}\\b`,
+			"i",
+		);
+		return pattern.test(title);
+	}
+
+	function normalizeResults(results, { isSeries, season } = {}) {
+		let forumIds = isSeries ? SERIES_FORUM_IDS : FORUM_IDS;
+		let minSize = isSeries ? SERIES_MIN_SIZE_GB : MIN_SIZE_GB;
+		let maxSize = isSeries ? SERIES_MAX_SIZE_GB : MAX_SIZE_GB;
+
 		return results
 			.filter(
-				(result) => result.ForumId == null || FORUM_IDS.has(result.ForumId),
+				(result) => result.ForumId == null || forumIds.has(result.ForumId),
 			)
 			.sort((a, b) => {
 				let weightA = 0;
@@ -817,12 +939,20 @@
 				let sizeA = bytesToGB(a.Size);
 				let sizeB = bytesToGB(b.Size);
 
-				if (sizeA >= MIN_SIZE_GB && sizeA <= MAX_SIZE_GB) {
+				if (sizeA >= minSize && sizeA <= maxSize) {
 					weightA += 10;
 				}
 
-				if (sizeB >= MIN_SIZE_GB && sizeB <= MAX_SIZE_GB) {
+				if (sizeB >= minSize && sizeB <= maxSize) {
 					weightB += 10;
+				}
+
+				if (titleMatchesSeason(a.Title, season)) {
+					weightA += 5;
+				}
+
+				if (titleMatchesSeason(b.Title, season)) {
+					weightB += 5;
 				}
 
 				if (a.Seeders > b.Seeders) {
@@ -837,7 +967,7 @@
 
 	let runGeneration = 0;
 
-	function waitForFilmReady(filmId, generation, reportStatus) {
+	function waitForFilmReady(filmId, generation, reportStatus, pageKey) {
 		return new Promise((resolve) => {
 			let observer;
 			let timer;
@@ -850,8 +980,11 @@
 				if (observer) observer.disconnect();
 			};
 
+			let isStale = () =>
+				generation !== runGeneration || getPageKey() !== pageKey;
+
 			let tryParse = () => {
-				if (generation !== runGeneration || getFilmId() !== filmId) {
+				if (isStale()) {
 					cleanup();
 					resolve(null);
 					return true;
@@ -862,10 +995,10 @@
 
 				if (!statusShown && reportStatus) {
 					statusShown = true;
-					reportStatus("Загрузка данных фильма…");
+					reportStatus("Загрузка данных…");
 				}
 
-				let json = parseJsonLd();
+				let json = unwrapSeriesJson(parseJsonLd());
 				let jsonReady = json && jsonLdMatchesFilm(json, filmId, $heading);
 				if (!jsonReady && !headingMatchesDocumentTitle($heading)) return false;
 
@@ -890,7 +1023,7 @@
 			poll = setInterval(tryParse, 250);
 
 			timer = setTimeout(() => {
-				if (generation !== runGeneration || getFilmId() !== filmId) {
+				if (isStale()) {
 					cleanup();
 					resolve(null);
 					return;
@@ -903,35 +1036,46 @@
 	}
 
 	async function runOnFilmPage() {
-		let filmId = getFilmId();
-		if (!filmId) {
+		let page = getPageInfo();
+		if (!page) {
 			runGeneration += 1;
 			removeUi();
 			return;
 		}
 
+		let filmId = page.id;
+		let pageKey = getPageKey(page);
 		let existing = document.getElementById("kinopoisk-jackett-container");
-		if (existing && existing.dataset.filmId === filmId) return;
+		if (existing && existing.dataset.pageKey === pageKey) return;
 
 		let generation = ++runGeneration;
 		removeUi();
 
-		console.log("Kinopoisk RuTracker: running for film", filmId);
+		console.log("Kinopoisk RuTracker: running for", page.type, filmId);
 
 		let reportStatus = (message) => {
-			if (generation !== runGeneration || getFilmId() !== filmId) return;
-			renderStatus(message, filmId);
+			if (generation !== runGeneration || getPageKey() !== pageKey) return;
+			renderStatus(message, filmId, pageKey);
 		};
 
 		reportStatus("Запуск…");
 
-		let movieData = await waitForFilmReady(filmId, generation, reportStatus);
+		let movieData = await waitForFilmReady(
+			filmId,
+			generation,
+			reportStatus,
+			pageKey,
+		);
 		if (generation !== runGeneration) return;
 
 		if (!movieData) {
 			console.log("Kinopoisk RuTracker: no movie data, quitting");
 			if (getFilmHeading()) {
-				render(new Error("Не удалось распарсить данные фильма"), filmId);
+				render(
+					new Error("Не удалось распарсить данные"),
+					filmId,
+					pageKey,
+				);
 			}
 			return;
 		}
@@ -939,21 +1083,25 @@
 		try {
 			reportStatus("Поиск раздач на RuTracker…");
 			const results = await searchRuTracker(movieData, reportStatus);
-			if (generation !== runGeneration || getFilmId() !== filmId) return;
+			if (generation !== runGeneration || getPageKey() !== pageKey) return;
 
 			console.log("Kinopoisk RuTracker: results", results);
 
-			const normalizedResults = normalizeResults(results);
+			const normalizedResults = normalizeResults(results, {
+				isSeries: movieData.isSeries,
+				season: movieData.season,
+			});
 			console.log("Kinopoisk RuTracker: normalized results", normalizedResults);
 
-			render(normalizedResults, filmId);
+			render(normalizedResults, filmId, pageKey);
 		} catch (e) {
-			if (generation !== runGeneration || getFilmId() !== filmId) return;
+			if (generation !== runGeneration || getPageKey() !== pageKey) return;
 
 			console.log("Kinopoisk RuTracker: search failed", e);
 			render(
 				e instanceof Error ? e : new Error("Получен пустой ответ от RuTracker"),
 				filmId,
+				pageKey,
 			);
 		}
 	}
