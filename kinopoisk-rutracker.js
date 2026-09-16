@@ -73,7 +73,10 @@
 	const STYLES = `
         #kinopoisk-jackett-container {
             display: flex;
+            align-items: center;
             margin: 20px 0;
+            min-height: 44px;
+            font: 14px/1.4 Graphik Kinopoisk LC Web,Arial,Tahoma,Verdana,sans-serif;
         }
 
         #kinopoisk-jackett-select {
@@ -174,18 +177,26 @@
 		return $parent || $heading.parentNode;
 	}
 
-	function render(results, filmId) {
+	function ensureContainer(filmId) {
+		injectStyles(STYLES);
+
+		let id = filmId || getFilmId() || "";
 		let $heading = getFilmHeading();
-		if (!$heading || !$heading.parentNode) return;
+		if (!$heading || !$heading.parentNode) return null;
+
+		let $parent = findMountParent($heading);
+		if (!$parent) return null;
+
+		let $existing = document.getElementById("kinopoisk-jackett-container");
+		if ($existing && $existing.dataset.filmId === id && $parent.contains($existing)) {
+			return $existing;
+		}
 
 		removeUi();
 
-		let $parent = findMountParent($heading);
-		if (!$parent) return;
-
 		let $container = document.createElement("div");
 		$container.id = "kinopoisk-jackett-container";
-		$container.dataset.filmId = filmId || getFilmId() || "";
+		$container.dataset.filmId = id;
 		$container.style.color = getComputedStyle($heading).color;
 		$parent.prepend($container);
 
@@ -194,13 +205,30 @@
 			$parent.prepend($parent.children[1]);
 		}
 
+		return $container;
+	}
+
+	function renderStatus(message, filmId) {
+		let $container = ensureContainer(filmId);
+		if (!$container) return;
+
+		$container.replaceChildren();
+		$container.textContent = message;
+	}
+
+	function render(results, filmId) {
+		let $container = ensureContainer(filmId);
+		if (!$container) return;
+
+		$container.replaceChildren();
+
 		if (results instanceof Error) {
-			$container.innerText = results.message;
+			$container.textContent = results.message;
 			return;
 		}
 
 		if (results.length === 0) {
-			$container.innerText = "Результаты не найдены на RuTracker";
+			$container.textContent = "Результаты не найдены на RuTracker";
 			return;
 		}
 
@@ -479,13 +507,14 @@
 		return `magnet:?xt=urn:btih:${infoHash}&${trackers}&dn=${encodeURIComponent(title)}`;
 	}
 
-	async function enrichWithMagnets(results) {
+	async function enrichWithMagnets(results, reportStatus) {
 		if (results.length === 0) return results;
 
 		let ids = results.map((result) => result.TopicId);
 		let url = `${RUTRACKER_API}/get_tor_topic_data?by=topic_id&val=${ids.join(",")}`;
 
 		try {
+			if (reportStatus) reportStatus("Получение magnet-ссылок…");
 			const res = await gmRequest(url);
 			console.log("Kinopoisk RuTracker: API response", res);
 
@@ -706,12 +735,14 @@
 		}
 	}
 
-	async function fetchSearchPayload(url) {
+	async function fetchSearchPayload(url, reportStatus) {
 		console.log("Kinopoisk RuTracker: request", url);
+		if (reportStatus) reportStatus("Запрос к RuTracker…");
 
 		try {
 			const res = await gmRequest(url);
 			console.log("Kinopoisk RuTracker: response", res);
+			if (reportStatus) reportStatus("Обработка ответа RuTracker…");
 
 			let html = responseHtml(res);
 			let ok = res.status ? res.status === 200 : res.statusText === "OK";
@@ -724,15 +755,24 @@
 					console.log(
 						"Kinopoisk RuTracker: XHR looks like anti-bot, opening helper tab",
 					);
+					if (reportStatus) {
+						reportStatus("Обход защиты RuTracker, открываю вспомогательную вкладку…");
+					}
 				}
 			} else {
 				console.log("Kinopoisk RuTracker: empty XHR, opening helper tab");
+				if (reportStatus) {
+					reportStatus("Пустой ответ RuTracker, открываю вспомогательную вкладку…");
+				}
 			}
 		} catch (e) {
 			if (e instanceof Error && e.message.includes("Войдите в RuTracker")) {
 				throw e;
 			}
 			console.log("Kinopoisk RuTracker: XHR failed, opening helper tab", e);
+			if (reportStatus) {
+				reportStatus("Ошибка запроса к RuTracker, открываю вспомогательную вкладку…");
+			}
 		}
 
 		try {
@@ -742,6 +782,7 @@
 				"Kinopoisk RuTracker: tab search failed, retrying XHR",
 				tabError,
 			);
+			if (reportStatus) reportStatus("Повторный запрос к RuTracker…");
 			const res = await gmRequest(url);
 			let html = responseHtml(res);
 			if (html) {
@@ -751,14 +792,17 @@
 		}
 	}
 
-	async function searchRuTracker({ name, alternateName, datePublished }) {
+	async function searchRuTracker(
+		{ name, alternateName, datePublished },
+		reportStatus,
+	) {
 		let query = `${name}${alternateName ? " " + alternateName : ""}${datePublished ? " " + datePublished : ""}`;
 		let url = `${RUTRACKER_HOST}/forum/tracker.php?nm=${encodeURIComponent(query)}&o=10&s=2&f=${[...FORUM_IDS].join(",")}`;
 
-		let payload = await fetchSearchPayload(url);
+		let payload = await fetchSearchPayload(url, reportStatus);
 		if (payload.error) throw new Error(payload.error);
 
-		return enrichWithMagnets(payload.results || []);
+		return enrichWithMagnets(payload.results || [], reportStatus);
 	}
 
 	function normalizeResults(results) {
@@ -793,11 +837,12 @@
 
 	let runGeneration = 0;
 
-	function waitForFilmReady(filmId, generation) {
+	function waitForFilmReady(filmId, generation, reportStatus) {
 		return new Promise((resolve) => {
 			let observer;
 			let timer;
 			let poll;
+			let statusShown = false;
 
 			let cleanup = () => {
 				clearTimeout(timer);
@@ -814,6 +859,11 @@
 
 				let $heading = getFilmHeading();
 				if (!$heading || !$heading.textContent.trim()) return false;
+
+				if (!statusShown && reportStatus) {
+					statusShown = true;
+					reportStatus("Загрузка данных фильма…");
+				}
 
 				let json = parseJsonLd();
 				let jsonReady = json && jsonLdMatchesFilm(json, filmId, $heading);
@@ -868,7 +918,14 @@
 
 		console.log("Kinopoisk RuTracker: running for film", filmId);
 
-		let movieData = await waitForFilmReady(filmId, generation);
+		let reportStatus = (message) => {
+			if (generation !== runGeneration || getFilmId() !== filmId) return;
+			renderStatus(message, filmId);
+		};
+
+		reportStatus("Запуск…");
+
+		let movieData = await waitForFilmReady(filmId, generation, reportStatus);
 		if (generation !== runGeneration) return;
 
 		if (!movieData) {
@@ -879,10 +936,9 @@
 			return;
 		}
 
-		injectStyles(STYLES);
-
 		try {
-			const results = await searchRuTracker(movieData);
+			reportStatus("Поиск раздач на RuTracker…");
+			const results = await searchRuTracker(movieData, reportStatus);
 			if (generation !== runGeneration || getFilmId() !== filmId) return;
 
 			console.log("Kinopoisk RuTracker: results", results);
