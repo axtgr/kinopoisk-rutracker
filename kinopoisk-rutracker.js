@@ -1,0 +1,695 @@
+// ==UserScript==
+// @name         Kinopoisk RuTracker
+// @namespace    http://tampermonkey.net/
+// @version      0.1.0
+// @description  Search movies from Kinopoisk on RuTracker and watch them in mpv
+// @author       axtgr
+// @match        https://www.kinopoisk.ru/film/*
+// @match        https://rutracker.org/*
+// @icon         https://www.google.com/s2/favicons?domain=kinopoisk.ru
+// @grant        GM.xmlHttpRequest
+// @grant        GM.openInTab
+// @grant        GM_openInTab
+// @grant        GM.setValue
+// @grant        GM.getValue
+// @grant        GM.deleteValue
+// @grant        GM.addValueChangeListener
+// @grant        GM.removeValueChangeListener
+// @connect      rutracker.org
+// @connect      api.t-ru.org
+// ==/UserScript==
+
+(async () => {
+	"use strict";
+
+	const RUTRACKER_HOST = "https://rutracker.org";
+	const RUTRACKER_API = "https://api.t-ru.org/v1";
+	const WATCH_URL_PREFIX = "mpv://";
+	const MIN_SIZE_GB = 4;
+	const MAX_SIZE_GB = 10;
+	const SEARCH_REQUEST_KEY = "kr-search-request";
+	const SEARCH_RESPONSE_KEY = "kr-search-response";
+	const SEARCH_TAB_TIMEOUT_MS = 45000;
+	const FORUM_IDS = new Set([
+		// Movies
+		22, 941, 1666, 376, 106,
+		// Movies/Foreign
+		7, 187, 2090, 2221, 2091, 2092, 2093, 2200, 1950, 252, 2540, 934, 505, 212,
+		2459, 1235, 166, 2183, 209, 484,
+		// Movies/Other
+		124, 1543, 709, 1577,
+		// TV/Other (theater)
+		511, 1493,
+		// Movies/DVD
+		93, 905, 101, 100, 877, 1576, 572, 2220, 1670, 1900, 2258, 521,
+		// Movies/HD
+		2198, 2199, 313, 312, 1247, 2201, 2339, 140, 194, 2343, 930, 2365,
+		// Movies/UHD
+		718, 775, 1457, 1940, 272, 271, 84,
+		// Movies/3D
+		352, 549, 1213, 2109,
+		// Movies (cartoons)
+		4, 208, 539, 822, 181,
+		// TV (cartoon series)
+		921, 815, 816, 1460, 498,
+		// TV/Anime
+		33, 1106, 1105, 599, 1389, 1391, 2491, 2544, 1642, 1390, 404, 1277,
+		// TV (Russian series)
+		9, 812, 81, 920, 80, 1535, 188, 91, 990, 1408, 175, 79, 104,
+		// TV/Foreign
+		189, 842, 235, 242, 819, 1531, 721, 1102, 1120, 1214, 489, 387, 1359, 184,
+		1417, 1449, 504, 372, 110, 121, 507, 536, 1144, 195,
+		// TV/HD
+		2366, 1803, 266, 193, 1690, 1459, 1463, 825, 1248, 1288, 265, 2404, 2405,
+		2370, 2396, 2398, 1498,
+		// TV/UHD
+		119, 1171, 1669, 2393, 625, 1949, 173, 273,
+		// TV/Foreign (LatAm / Turkey / India)
+		911, 325, 534, 594, 1301, 607, 1574, 1539, 694, 781, 704, 1537,
+		// TV/Foreign (Asian series)
+		2100, 820, 915, 1242, 717, 1939, 2412,
+	]);
+
+	const STYLES = `
+        #kinopoisk-jackett-container {
+            display: flex;
+            margin: 20px 0;
+        }
+
+        #kinopoisk-jackett-select {
+            width: 100%;
+            height: 44px;
+            padding: 0 13px;
+            border: 0;
+            border-radius: 52px 0 0 52px;
+            font: 14px/1 Graphik Kinopoisk LC Web,Arial,Tahoma,Verdana,sans-serif;
+        }
+
+        .kinopoisk-jackett-button {
+            display: inline-block;
+            box-sizing: border-box;
+            height: 44px;
+            padding: 13px 22px;
+            color: #fff;
+            text-decoration: none;
+            border: 0;
+            border-right: 1px solid rgba(255, 255, 255, 0.25);
+            background: #f60 no-repeat 50% 50%;
+            transition: background-color 0.12s;
+        }
+
+        .kinopoisk-jackett-button:hover {
+            background-color: rgb(240, 92, 0);
+        }
+
+        .kinopoisk-jackett-button:last-child {
+            padding-right: 16px;
+            padding-left: 18px;
+            border-right: 0;
+            border-radius: 0 52px 52px 0;
+        }
+
+        .kinopoisk-jackett-button_link {
+            background-image: url("data:image/svg+xml,%3Csvg height='22' width='22' viewBox='0 0 141.732 151.732' style='fill:%23fff;stroke:%23fff;stroke-width:5;' xml:space='preserve' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M57.217 63.271 20.853 99.637c-4.612 4.608-7.15 10.738-7.15 17.259 0 6.524 2.541 12.653 7.151 17.261a24.265 24.265 0 0 0 17.259 7.15h.002c6.52 0 12.648-2.54 17.257-7.15L91.738 97.79c7.484-7.484 9.261-18.854 4.573-28.188l-7.984 7.985a14.193 14.193 0 0 1-3.831 12.957l-37.28 37.277-.026-.023a14.411 14.411 0 0 1-9.527 3.579c-3.768 0-7.295-1.453-9.937-4.092-2.681-2.68-4.13-6.259-4.093-10.078a14.449 14.449 0 0 1 3.584-9.39l-.021-.02.511-.515a6.86 6.86 0 0 1 .206-.211c.021-.021.043-.044.064-.062l.123-.125 36.364-36.366a14.07 14.07 0 0 1 10.008-4.144c.977 0 1.947.101 2.899.298l7.993-7.995a24.422 24.422 0 0 0-10.889-2.554 24.26 24.26 0 0 0-17.258 7.148m70.592-38.934c0-6.52-2.541-12.65-7.15-17.258-4.61-4.613-10.74-7.151-17.261-7.151a24.237 24.237 0 0 0-17.257 7.151L49.774 43.442c-7.479 7.478-9.26 18.84-4.585 28.17l7.646-7.646c-.877-4.368.358-8.964 3.315-12.356l-.021-.022.502-.507.201-.206.062-.06.126-.127 36.363-36.364a14.068 14.068 0 0 1 10.014-4.147c3.784 0 7.339 1.472 10.014 4.147 5.522 5.521 5.522 14.51 0 20.027L76.138 71.629l-.026-.026a14.411 14.411 0 0 1-9.526 3.581c-.951 0-1.891-.094-2.814-.278l-7.645 7.645a24.442 24.442 0 0 0 10.907 2.563c6.523 0 12.652-2.539 17.261-7.148l36.365-36.365c4.61-4.613 7.149-10.742 7.149-17.264'/%3E%3C/svg%3E");
+        }
+
+        .kinopoisk-jackett-button_download {
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 512 512'%3E%3Cpath style='fill:%23fff;fill-opacity:1;stroke:%23fff;stroke-width:20;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-opacity:1;stroke-dasharray:none' d='M181 646.362v150h-75l150 150 150-150h-75v-150H181z' transform='translate(0 -540.362)'/%3E%3C/svg%3E");
+        }
+
+        .kinopoisk-jackett-button_watch::before {
+            content: "";
+            display: inline-block;
+            width: 0;
+            height: 0;
+
+            border-color: transparent;
+            border-left-color: #fff;
+            border-style: solid;
+            border-width: 10px 0 10px 18px;
+        }
+    `;
+
+	function bytesToGB(bytes) {
+		return bytes / 2 ** 30;
+	}
+
+	function getTorrentUrlForResult(result) {
+		return result.MagnetUri || result.Link || result.DownloadLink;
+	}
+
+	function render(results) {
+		let $heading = document.querySelector("h1[itemprop=name]");
+		let $parent = $heading.parentNode.nextElementSibling;
+
+		if ($parent.tagName.toLowerCase() === "button") {
+			$parent = $parent.nextElementSibling;
+		}
+
+		let $container = document.createElement("div");
+		$container.id = "kinopoisk-jackett-container";
+		$container.style.color = getComputedStyle($heading).color;
+		$parent.prepend($container);
+
+		// Remove the original Play button
+		// $parent.querySelector('a').remove()
+
+		// If there is a description, put it before our controls
+		if ($parent.children[1].tagName === "P") {
+			$parent.prepend($parent.children[1]);
+		}
+
+		if (results instanceof Error) {
+			$container.innerText = results.message;
+			return;
+		}
+
+		if (results.length === 0) {
+			$container.innerText = "Результаты не найдены на RuTracker";
+			return;
+		}
+
+		let $linkButton = document.createElement("a");
+		$linkButton.classList.add(
+			"kinopoisk-jackett-button",
+			"kinopoisk-jackett-button_link",
+		);
+		$linkButton.title = "Открыть раздачу";
+
+		let $downloadButton = document.createElement("a");
+		$downloadButton.classList.add(
+			"kinopoisk-jackett-button",
+			"kinopoisk-jackett-button_download",
+		);
+		$downloadButton.title = "Скачать";
+
+		let $watchButton = document.createElement("a");
+		$watchButton.classList.add(
+			"kinopoisk-jackett-button",
+			"kinopoisk-jackett-button_watch",
+		);
+		$watchButton.title = "Смотреть";
+
+		let updateUIForResult = (result) => {
+			let torrentUrl = getTorrentUrlForResult(result);
+			$linkButton.href = result.Details;
+			$downloadButton.href = torrentUrl;
+			$watchButton.href = WATCH_URL_PREFIX + torrentUrl;
+		};
+
+		let $select = document.createElement("select");
+		$select.id = "kinopoisk-jackett-select";
+		$select.onchange = () => {
+			let result = results[$select.value];
+			updateUIForResult(result);
+		};
+
+		results.forEach((result, i) => {
+			let $option = document.createElement("option");
+			$option.value = i;
+			$option.textContent = `(${result.Tracker}, ${bytesToGB(result.Size).toFixed(2)}gb, ${result.Seeders}s) ${result.Title}`;
+			$select.appendChild($option);
+		});
+
+		updateUIForResult(results[0]);
+		$container.prepend($watchButton);
+		$container.prepend($downloadButton);
+		$container.prepend($linkButton);
+		$container.prepend($select);
+	}
+
+	function parseMovieData() {
+		let $dataScript = document.querySelector(
+			'script[type="application/ld+json"]',
+		);
+
+		if ($dataScript) {
+			return JSON.parse($dataScript.textContent);
+		}
+	}
+
+	function injectStyles(styles) {
+		let $style = document.createElement("style");
+		$style.textContent = styles;
+		document.head.appendChild($style);
+	}
+
+	function gmRequest(url, options = {}) {
+		let details = {
+			method: "GET",
+			url,
+			...options,
+		};
+
+		if (url.startsWith(RUTRACKER_HOST)) {
+			details.overrideMimeType = "text/html; charset=windows-1251";
+			details.cookiePartition = { topLevelSite: RUTRACKER_HOST };
+		}
+
+		return GM.xmlHttpRequest(details);
+	}
+
+	function responseHtml(res) {
+		return (res && (res.responseText || res.response)) || "";
+	}
+
+	function isReadyTrackerDocument(doc) {
+		return Boolean(
+			doc.querySelector("#tor-tbl") ||
+				doc.querySelector("#logged-in-username") ||
+				doc.querySelector("form#login-form-full"),
+		);
+	}
+
+	function parseForumId(href) {
+		if (!href) return null;
+		let match = href.match(/[?&]f=(\d+)/);
+		return match ? Number(match[1]) : null;
+	}
+
+	function parseTopicId(link) {
+		let id = link.getAttribute("data-topic_id");
+		if (id) return String(id);
+		let href = link.getAttribute("href") || "";
+		let match = href.match(/[?&]t=(\d+)/);
+		return match ? match[1] : null;
+	}
+
+	function parseSearchResults(html) {
+		let doc = new DOMParser().parseFromString(html, "text/html");
+
+		if (!isReadyTrackerDocument(doc)) {
+			let error = new Error("RuTracker anti-bot");
+			error.name = "AntiBotError";
+			throw error;
+		}
+
+		if (
+			doc.querySelector("form#login-form-full") ||
+			!doc.querySelector("#logged-in-username")
+		) {
+			throw new Error("Войдите в RuTracker в этом браузере");
+		}
+
+		let results = [];
+
+		doc.querySelectorAll("table#tor-tbl > tbody > tr").forEach((row) => {
+			if (!row.querySelector("td.tor-size > a.tr-dl")) return;
+
+			let titleLink =
+				row.querySelector("td.t-title-col > div.t-title > a.tLink") ||
+				row.querySelector("a.tLink, a[data-topic_id]");
+			if (!titleLink) return;
+
+			let topicId = parseTopicId(titleLink);
+			if (!topicId) return;
+
+			let forumLink = row.querySelector("td.f-name-col a");
+			let forumId = parseForumId(forumLink && forumLink.getAttribute("href"));
+
+			let sizeCell = row.querySelector("td.tor-size");
+			let size = Number(sizeCell && sizeCell.getAttribute("data-ts_text")) || 0;
+
+			let seedersCell =
+				row.querySelector("td.seedmed, b.seedmed") ||
+				row.querySelector("td:nth-child(7)");
+			let seeders = 0;
+			if (seedersCell && !seedersCell.textContent.includes("дн")) {
+				let seedersText = (
+					seedersCell.querySelector("b") || seedersCell
+				).textContent.trim();
+				seeders = Number(seedersText) || 0;
+			}
+
+			let details = `${RUTRACKER_HOST}/forum/viewtopic.php?t=${topicId}`;
+
+			results.push({
+				TopicId: topicId,
+				ForumId: forumId,
+				Title: titleLink.textContent.trim(),
+				Size: size,
+				Seeders: seeders,
+				Details: details,
+				Tracker: "RuTracker",
+				Link: details,
+			});
+		});
+
+		return results;
+	}
+
+	function buildMagnet(infoHash, title) {
+		let trackers = ["", "2", "3", "4"]
+			.map(
+				(n) => `tr=${encodeURIComponent(`http://bt${n}.t-ru.org/ann?magnet`)}`,
+			)
+			.join("&");
+
+		return `magnet:?xt=urn:btih:${infoHash}&${trackers}&dn=${encodeURIComponent(title)}`;
+	}
+
+	async function enrichWithMagnets(results) {
+		if (results.length === 0) return results;
+
+		let ids = results.map((result) => result.TopicId);
+		let url = `${RUTRACKER_API}/get_tor_topic_data?by=topic_id&val=${ids.join(",")}`;
+
+		try {
+			const res = await gmRequest(url);
+			console.log("Kinopoisk RuTracker: API response", res);
+
+			if (res.status && res.status !== 200) return results;
+
+			let data = JSON.parse(res.responseText);
+			let topics = data && data.result;
+			if (!topics) return results;
+
+			return results.map((result) => {
+				let topic = topics[result.TopicId];
+				if (!topic || !topic.info_hash) return result;
+
+				let magnet = buildMagnet(topic.info_hash, result.Title);
+
+				return {
+					...result,
+					Size: topic.size || result.Size,
+					MagnetUri: magnet,
+					Link: magnet,
+				};
+			});
+		} catch (e) {
+			console.log("Kinopoisk RuTracker: API enrich failed", e);
+			return results;
+		}
+	}
+
+	function waitForTrackerPage(timeoutMs) {
+		return new Promise((resolve, reject) => {
+			if (isReadyTrackerDocument(document)) {
+				resolve("ready");
+				return;
+			}
+
+			let settled = false;
+			let finish = (value, error) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				observer.disconnect();
+				window.removeEventListener("pagehide", onPageHide);
+				if (error) reject(error);
+				else resolve(value);
+			};
+
+			let timer = setTimeout(() => {
+				finish(
+					null,
+					new Error(
+						"Не удалось пройти защиту RuTracker. Откройте rutracker.org и обновите страницу.",
+					),
+				);
+			}, timeoutMs);
+
+			let onPageHide = () => finish("navigated");
+			let observer = new MutationObserver(() => {
+				if (isReadyTrackerDocument(document)) finish("ready");
+			});
+
+			observer.observe(document.documentElement, {
+				childList: true,
+				subtree: true,
+			});
+			window.addEventListener("pagehide", onPageHide);
+		});
+	}
+
+	async function handleRuTrackerBackgroundTab() {
+		let pending = await GM.getValue(SEARCH_REQUEST_KEY);
+		if (!pending || !pending.requestId) return;
+		if (Date.now() - pending.ts > SEARCH_TAB_TIMEOUT_MS + 5000) return;
+
+		try {
+			window.blur();
+		} catch (e) {}
+
+		try {
+			let status = await waitForTrackerPage(SEARCH_TAB_TIMEOUT_MS);
+			if (status !== "ready") return;
+
+			let stillPending = await GM.getValue(SEARCH_REQUEST_KEY);
+			if (!stillPending || stillPending.requestId !== pending.requestId) return;
+
+			let results = parseSearchResults(document.documentElement.outerHTML);
+			await GM.setValue(SEARCH_RESPONSE_KEY, {
+				requestId: pending.requestId,
+				results,
+			});
+			await GM.deleteValue(SEARCH_REQUEST_KEY);
+		} catch (e) {
+			if (e && e.name === "AntiBotError") return;
+
+			let stillPending = await GM.getValue(SEARCH_REQUEST_KEY);
+			if (!stillPending || stillPending.requestId !== pending.requestId) return;
+
+			await GM.setValue(SEARCH_RESPONSE_KEY, {
+				requestId: pending.requestId,
+				error:
+					e instanceof Error ? e.message : "Получен пустой ответ от RuTracker",
+			});
+		}
+	}
+
+	function waitForSearchResponse(requestId, timeoutMs) {
+		return new Promise((resolve, reject) => {
+			let listenerId;
+			let interval;
+			let settled = false;
+
+			let cleanup = () => {
+				clearTimeout(timer);
+				clearInterval(interval);
+				if (
+					listenerId != null &&
+					typeof GM.removeValueChangeListener === "function"
+				) {
+					GM.removeValueChangeListener(listenerId);
+				}
+			};
+
+			let finish = (value, error) => {
+				if (settled) return;
+				settled = true;
+				cleanup();
+				if (error) reject(error);
+				else resolve(value);
+			};
+
+			let accept = (value) => {
+				if (!value || value.requestId !== requestId) return;
+				finish(value);
+			};
+
+			let timer = setTimeout(() => {
+				finish(
+					null,
+					new Error(
+						"Не удалось пройти защиту RuTracker. Откройте rutracker.org и обновите страницу.",
+					),
+				);
+			}, timeoutMs);
+
+			if (typeof GM.addValueChangeListener === "function") {
+				listenerId = GM.addValueChangeListener(
+					SEARCH_RESPONSE_KEY,
+					(_name, _oldValue, newValue) => {
+						accept(newValue);
+					},
+				);
+			}
+
+			interval = setInterval(async () => {
+				accept(await GM.getValue(SEARCH_RESPONSE_KEY));
+			}, 400);
+		});
+	}
+
+	function keepPageFocused() {
+		let running = true;
+		let tick = () => {
+			if (!running) return;
+			try {
+				window.focus();
+			} catch (e) {}
+		};
+
+		tick();
+		let id = setInterval(tick, 50);
+
+		return () => {
+			running = false;
+			clearInterval(id);
+			tick();
+		};
+	}
+
+	function openBackgroundTab(url) {
+		let options = {
+			active: false,
+			loadInBackground: true,
+			insert: true,
+		};
+
+		if (typeof GM.openInTab === "function") {
+			return GM.openInTab(url, options);
+		}
+
+		if (typeof GM_openInTab === "function") {
+			return GM_openInTab(url, options);
+		}
+
+		throw new Error("GM.openInTab is unavailable");
+	}
+
+	async function fetchTrackerHtmlViaTab(url) {
+		let requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+		await GM.deleteValue(SEARCH_RESPONSE_KEY);
+
+		let responsePromise = waitForSearchResponse(
+			requestId,
+			SEARCH_TAB_TIMEOUT_MS,
+		);
+		await GM.setValue(SEARCH_REQUEST_KEY, { requestId, ts: Date.now() });
+
+		let releaseFocus = keepPageFocused();
+		let tab = openBackgroundTab(url);
+
+		try {
+			return await responsePromise;
+		} finally {
+			try {
+				tab.close();
+			} catch (e) {}
+			releaseFocus();
+			await GM.deleteValue(SEARCH_REQUEST_KEY);
+			await GM.deleteValue(SEARCH_RESPONSE_KEY);
+		}
+	}
+
+	async function fetchSearchPayload(url) {
+		console.log("Kinopoisk RuTracker: request", url);
+
+		try {
+			const res = await gmRequest(url);
+			console.log("Kinopoisk RuTracker: response", res);
+
+			let html = responseHtml(res);
+			let ok = res.status ? res.status === 200 : res.statusText === "OK";
+
+			if (ok && html) {
+				try {
+					return { results: parseSearchResults(html) };
+				} catch (e) {
+					if (!e || e.name !== "AntiBotError") throw e;
+					console.log(
+						"Kinopoisk RuTracker: XHR looks like anti-bot, opening helper tab",
+					);
+				}
+			} else {
+				console.log("Kinopoisk RuTracker: empty XHR, opening helper tab");
+			}
+		} catch (e) {
+			if (e instanceof Error && e.message.includes("Войдите в RuTracker")) {
+				throw e;
+			}
+			console.log("Kinopoisk RuTracker: XHR failed, opening helper tab", e);
+		}
+
+		try {
+			return await fetchTrackerHtmlViaTab(url);
+		} catch (tabError) {
+			console.log(
+				"Kinopoisk RuTracker: tab search failed, retrying XHR",
+				tabError,
+			);
+			const res = await gmRequest(url);
+			let html = responseHtml(res);
+			if (html) {
+				return { results: parseSearchResults(html) };
+			}
+			throw tabError;
+		}
+	}
+
+	async function searchRuTracker({ name, alternateName, datePublished }) {
+		let query = `${name}${alternateName ? " " + alternateName : ""}${datePublished ? " " + datePublished : ""}`;
+		let url = `${RUTRACKER_HOST}/forum/tracker.php?nm=${encodeURIComponent(query)}&o=10&s=2&f=${[...FORUM_IDS].join(",")}`;
+
+		let payload = await fetchSearchPayload(url);
+		if (payload.error) throw new Error(payload.error);
+
+		return enrichWithMagnets(payload.results || []);
+	}
+
+	function normalizeResults(results) {
+		return results
+			.filter(
+				(result) => result.ForumId == null || FORUM_IDS.has(result.ForumId),
+			)
+			.sort((a, b) => {
+				let weightA = 0;
+				let weightB = 0;
+
+				let sizeA = bytesToGB(a.Size);
+				let sizeB = bytesToGB(b.Size);
+
+				if (sizeA >= MIN_SIZE_GB && sizeA <= MAX_SIZE_GB) {
+					weightA += 10;
+				}
+
+				if (sizeB >= MIN_SIZE_GB && sizeB <= MAX_SIZE_GB) {
+					weightB += 10;
+				}
+
+				if (a.Seeders > b.Seeders) {
+					weightA += 1;
+				} else if (b.Seeders > a.Seeders) {
+					weightB += 1;
+				}
+
+				return weightB - weightA;
+			});
+	}
+
+	console.log("Kinopoisk RuTracker: running");
+
+	if (/(^|\.)rutracker\.org$/i.test(location.hostname)) {
+		await handleRuTrackerBackgroundTab();
+		return;
+	}
+
+	let movieData = parseMovieData();
+
+	if (!movieData) {
+		console.log("Kinopoisk RuTracker: no movie data, quitting");
+		let error = new Error("Не удалось распарсить данные фильма");
+		render(error);
+		return;
+	}
+
+	injectStyles(STYLES);
+
+	try {
+		const results = await searchRuTracker(movieData);
+		console.log("Kinopoisk RuTracker: results", results);
+
+		const normalizedResults = normalizeResults(results);
+		console.log("Kinopoisk RuTracker: normalized results", normalizedResults);
+
+		render(normalizedResults);
+	} catch (e) {
+		console.log("Kinopoisk RuTracker: search failed", e);
+		render(
+			e instanceof Error ? e : new Error("Получен пустой ответ от RuTracker"),
+		);
+	}
+})();
