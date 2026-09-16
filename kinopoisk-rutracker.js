@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Kinopoisk RuTracker
 // @namespace    http://tampermonkey.net/
-// @version      0.1.0
+// @version      0.1.1
 // @description  Search movies from Kinopoisk on RuTracker and watch them in mpv
 // @author       axtgr
-// @match        https://www.kinopoisk.ru/film/*
+// @match        https://www.kinopoisk.ru/*
 // @match        https://rutracker.org/*
 // @icon         https://www.google.com/s2/favicons?domain=kinopoisk.ru
 // @grant        GM.xmlHttpRequest
@@ -138,24 +138,59 @@
 		return result.MagnetUri || result.Link || result.DownloadLink;
 	}
 
-	function render(results) {
-		let $heading = document.querySelector("h1[itemprop=name]");
-		let $parent = $heading.parentNode.nextElementSibling;
+	function getFilmId() {
+		let match = location.pathname.match(/^\/film\/(\d+)\/?$/);
+		return match ? match[1] : null;
+	}
+
+	function getFilmHeading() {
+		let candidates = [
+			...document.querySelectorAll("h1[itemprop=name]"),
+			...document.querySelectorAll("h1"),
+		];
+
+		for (let heading of candidates) {
+			if (heading.textContent.trim() && heading.getClientRects().length > 0) {
+				return heading;
+			}
+		}
+
+		return candidates[0] || null;
+	}
+
+	function removeUi() {
+		let $container = document.getElementById("kinopoisk-jackett-container");
+		if ($container) $container.remove();
+	}
+
+	function findMountParent($heading) {
+		let $parent = $heading.parentNode && $heading.parentNode.nextElementSibling;
+		if (!$parent) return $heading.parentNode;
 
 		if ($parent.tagName.toLowerCase() === "button") {
 			$parent = $parent.nextElementSibling;
 		}
 
+		return $parent || $heading.parentNode;
+	}
+
+	function render(results, filmId) {
+		let $heading = getFilmHeading();
+		if (!$heading || !$heading.parentNode) return;
+
+		removeUi();
+
+		let $parent = findMountParent($heading);
+		if (!$parent) return;
+
 		let $container = document.createElement("div");
 		$container.id = "kinopoisk-jackett-container";
+		$container.dataset.filmId = filmId || getFilmId() || "";
 		$container.style.color = getComputedStyle($heading).color;
 		$parent.prepend($container);
 
-		// Remove the original Play button
-		// $parent.querySelector('a').remove()
-
 		// If there is a description, put it before our controls
-		if ($parent.children[1].tagName === "P") {
+		if ($parent.children[1] && $parent.children[1].tagName === "P") {
 			$parent.prepend($parent.children[1]);
 		}
 
@@ -218,18 +253,114 @@
 		$container.prepend($select);
 	}
 
-	function parseMovieData() {
-		let $dataScript = document.querySelector(
-			'script[type="application/ld+json"]',
-		);
-
-		if ($dataScript) {
-			return JSON.parse($dataScript.textContent);
+	function extractMovieFromLd(data) {
+		if (!data) return null;
+		if (Array.isArray(data)) {
+			for (let item of data) {
+				let movie = extractMovieFromLd(item);
+				if (movie) return movie;
+			}
+			return null;
 		}
+		if (data["@graph"]) return extractMovieFromLd(data["@graph"]);
+
+		let type = data["@type"];
+		let types = Array.isArray(type) ? type : [type];
+		if (
+			types.some(
+				(item) => item === "Movie" || item === "TVSeries" || item === "TVEpisode",
+			)
+		) {
+			return data;
+		}
+
+		if (data.name && (data.url || data.alternateName || data.datePublished)) {
+			return data;
+		}
+
+		return null;
+	}
+
+	function parseJsonLd() {
+		for (let $dataScript of document.querySelectorAll(
+			'script[type="application/ld+json"]',
+		)) {
+			try {
+				let movie = extractMovieFromLd(JSON.parse($dataScript.textContent));
+				if (movie && movie.name) return movie;
+			} catch (e) {}
+		}
+
+		return null;
+	}
+
+	function parseMovieDataFromDom($heading) {
+		$heading = $heading || getFilmHeading();
+		if (!$heading) return null;
+
+		let nameNode = [...$heading.childNodes].find(
+			(node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim(),
+		);
+		let name = (nameNode ? nameNode.textContent : $heading.textContent)
+			.replace(/\s*\(\d{4}.*$/, "")
+			.trim();
+		if (!name) return null;
+
+		let yearMatch = $heading.textContent.match(/\((\d{4})\)/);
+		let $alternate = document.querySelector("[itemprop=alternativeHeadline]");
+
+		return {
+			name,
+			alternateName: $alternate && $alternate.textContent.trim(),
+			datePublished: yearMatch ? yearMatch[1] : undefined,
+		};
+	}
+
+	function jsonLdMatchesFilm(movie, filmId, $heading) {
+		if (filmId && movie.url) {
+			return String(movie.url).includes(`/film/${filmId}`);
+		}
+
+		return Boolean(
+			$heading && movie.name && $heading.textContent.includes(movie.name),
+		);
+	}
+
+	function headingMatchesDocumentTitle($heading) {
+		if (!$heading) return false;
+
+		let headingText = $heading.textContent.replace(/\s+/g, " ").trim();
+		if (!headingText) return false;
+
+		let titleHead = document.title.split(/\s+[—–|-]\s+/)[0].trim();
+		if (!titleHead) return false;
+
+		let titleName = titleHead.replace(/\s*\(\d{4}.*$/, "").trim();
+		let headingName = headingText.replace(/\s*\(\d{4}.*$/, "").trim();
+
+		return (
+			(titleName.length > 1 && headingText.includes(titleName)) ||
+			(headingName.length > 1 && titleHead.includes(headingName))
+		);
+	}
+
+	function parseMovieData(filmId, $heading) {
+		$heading = $heading || getFilmHeading();
+		let json = parseJsonLd();
+
+		if (json && json.name && jsonLdMatchesFilm(json, filmId, $heading)) {
+			return json;
+		}
+
+		return parseMovieDataFromDom($heading);
 	}
 
 	function injectStyles(styles) {
+		if (document.getElementById("kinopoisk-rutracker-styles")) return;
+		if (!document.head) return;
+
 		let $style = document.createElement("style");
+		$style.id = "kinopoisk-rutracker-styles";
 		$style.textContent = styles;
 		document.head.appendChild($style);
 	}
@@ -660,6 +791,180 @@
 			});
 	}
 
+	let runGeneration = 0;
+
+	function waitForFilmReady(filmId, generation) {
+		return new Promise((resolve) => {
+			let observer;
+			let timer;
+			let poll;
+
+			let cleanup = () => {
+				clearTimeout(timer);
+				clearInterval(poll);
+				if (observer) observer.disconnect();
+			};
+
+			let tryParse = () => {
+				if (generation !== runGeneration || getFilmId() !== filmId) {
+					cleanup();
+					resolve(null);
+					return true;
+				}
+
+				let $heading = getFilmHeading();
+				if (!$heading || !$heading.textContent.trim()) return false;
+
+				let json = parseJsonLd();
+				let jsonReady = json && jsonLdMatchesFilm(json, filmId, $heading);
+				if (!jsonReady && !headingMatchesDocumentTitle($heading)) return false;
+
+				let movieData = parseMovieData(filmId, $heading);
+				if (!movieData || !movieData.name) return false;
+
+				cleanup();
+				resolve(movieData);
+				return true;
+			};
+
+			if (tryParse()) return;
+
+			observer = new MutationObserver(() => {
+				tryParse();
+			});
+			observer.observe(document.documentElement, {
+				childList: true,
+				subtree: true,
+				characterData: true,
+			});
+			poll = setInterval(tryParse, 250);
+
+			timer = setTimeout(() => {
+				if (generation !== runGeneration || getFilmId() !== filmId) {
+					cleanup();
+					resolve(null);
+					return;
+				}
+
+				cleanup();
+				resolve(parseMovieData(filmId, getFilmHeading()));
+			}, 20000);
+		});
+	}
+
+	async function runOnFilmPage() {
+		let filmId = getFilmId();
+		if (!filmId) {
+			runGeneration += 1;
+			removeUi();
+			return;
+		}
+
+		let existing = document.getElementById("kinopoisk-jackett-container");
+		if (existing && existing.dataset.filmId === filmId) return;
+
+		let generation = ++runGeneration;
+		removeUi();
+
+		console.log("Kinopoisk RuTracker: running for film", filmId);
+
+		let movieData = await waitForFilmReady(filmId, generation);
+		if (generation !== runGeneration) return;
+
+		if (!movieData) {
+			console.log("Kinopoisk RuTracker: no movie data, quitting");
+			if (getFilmHeading()) {
+				render(new Error("Не удалось распарсить данные фильма"), filmId);
+			}
+			return;
+		}
+
+		injectStyles(STYLES);
+
+		try {
+			const results = await searchRuTracker(movieData);
+			if (generation !== runGeneration || getFilmId() !== filmId) return;
+
+			console.log("Kinopoisk RuTracker: results", results);
+
+			const normalizedResults = normalizeResults(results);
+			console.log("Kinopoisk RuTracker: normalized results", normalizedResults);
+
+			render(normalizedResults, filmId);
+		} catch (e) {
+			if (generation !== runGeneration || getFilmId() !== filmId) return;
+
+			console.log("Kinopoisk RuTracker: search failed", e);
+			render(
+				e instanceof Error ? e : new Error("Получен пустой ответ от RuTracker"),
+				filmId,
+			);
+		}
+	}
+
+	function watchKinopoiskNavigation() {
+		let lastPathname = null;
+		let scheduled = null;
+
+		let checkUrlChange = () => {
+			if (location.pathname === lastPathname) return;
+			lastPathname = location.pathname;
+			clearTimeout(scheduled);
+			scheduled = setTimeout(runOnFilmPage, 50);
+		};
+
+		let wrapHistory = (method) => {
+			try {
+				let original = history[method];
+				if (typeof original !== "function") return;
+
+				history[method] = function (...args) {
+					let result = original.apply(this, args);
+					checkUrlChange();
+					return result;
+				};
+			} catch (e) {}
+		};
+
+		wrapHistory("pushState");
+		wrapHistory("replaceState");
+		window.addEventListener("popstate", checkUrlChange);
+
+		try {
+			if (
+				window.navigation &&
+				typeof window.navigation.addEventListener === "function"
+			) {
+				window.navigation.addEventListener("navigate", checkUrlChange);
+			}
+		} catch (e) {}
+
+		let observeTitle = () => {
+			let $title = document.querySelector("title");
+			if (!$title) return false;
+
+			new MutationObserver(checkUrlChange).observe($title, {
+				childList: true,
+				characterData: true,
+				subtree: true,
+			});
+			return true;
+		};
+
+		if (!observeTitle() && document.documentElement) {
+			let headObserver = new MutationObserver(() => {
+				if (observeTitle()) headObserver.disconnect();
+			});
+			headObserver.observe(document.documentElement, {
+				childList: true,
+				subtree: true,
+			});
+		}
+
+		setInterval(checkUrlChange, 400);
+		checkUrlChange();
+	}
+
 	console.log("Kinopoisk RuTracker: running");
 
 	if (/(^|\.)rutracker\.org$/i.test(location.hostname)) {
@@ -667,29 +972,5 @@
 		return;
 	}
 
-	let movieData = parseMovieData();
-
-	if (!movieData) {
-		console.log("Kinopoisk RuTracker: no movie data, quitting");
-		let error = new Error("Не удалось распарсить данные фильма");
-		render(error);
-		return;
-	}
-
-	injectStyles(STYLES);
-
-	try {
-		const results = await searchRuTracker(movieData);
-		console.log("Kinopoisk RuTracker: results", results);
-
-		const normalizedResults = normalizeResults(results);
-		console.log("Kinopoisk RuTracker: normalized results", normalizedResults);
-
-		render(normalizedResults);
-	} catch (e) {
-		console.log("Kinopoisk RuTracker: search failed", e);
-		render(
-			e instanceof Error ? e : new Error("Получен пустой ответ от RuTracker"),
-		);
-	}
+	watchKinopoiskNavigation();
 })();
