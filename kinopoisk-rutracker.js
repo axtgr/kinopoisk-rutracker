@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Kinopoisk RuTracker
 // @namespace    http://tampermonkey.net/
-// @version      0.2.0
+// @version      0.2.1
 // @description  Search movies and series from Kinopoisk on RuTracker and download them
 // @author       axtgr
 // @match        https://www.kinopoisk.ru/*
@@ -23,8 +23,8 @@
 	"use strict";
 
 	const RUTRACKER_HOST = "https://rutracker.org";
-	const MIN_SIZE_GB = 4;
-	const MAX_SIZE_GB = 10;
+	const MIN_SIZE_GB = 6;
+	const MAX_SIZE_GB = 25;
 	const SERIES_MIN_SIZE_GB = 3;
 	const SERIES_MAX_SIZE_GB = 120;
 	const SEARCH_REQUEST_KEY = "kr-search-request";
