@@ -143,7 +143,7 @@
 	}
 
 	function getTorrentUrlForResult(result) {
-		return result.MagnetUri || result.Link || result.DownloadLink;
+		return result.MagnetUri || result.DownloadLink || result.Link.replace('viewtopic.php', 'dl.php');
 	}
 
 	function getPageInfo() {
