@@ -2,7 +2,7 @@
 // @name         Kinopoisk RuTracker
 // @namespace    http://tampermonkey.net/
 // @version      0.1.2
-// @description  Search movies and series from Kinopoisk on RuTracker and watch them in mpv
+// @description  Search movies and series from Kinopoisk on RuTracker and download them
 // @author       axtgr
 // @match        https://www.kinopoisk.ru/*
 // @match        https://rutracker.org/*
@@ -24,7 +24,6 @@
 
 	const RUTRACKER_HOST = "https://rutracker.org";
 	const RUTRACKER_API = "https://api.t-ru.org/v1";
-	const WATCH_URL_PREFIX = "mpv://";
 	const MIN_SIZE_GB = 4;
 	const MAX_SIZE_GB = 10;
 	const SERIES_MIN_SIZE_GB = 3;
@@ -111,8 +110,8 @@
         }
 
         .kinopoisk-jackett-button:last-child {
-            padding-right: 16px;
-            padding-left: 18px;
+            padding-right: 32px;
+            padding-left: 20px;
             border-right: 0;
             border-radius: 0 52px 52px 0;
         }
@@ -123,18 +122,6 @@
 
         .kinopoisk-jackett-button_download {
             background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 512 512'%3E%3Cpath style='fill:%23fff;fill-opacity:1;stroke:%23fff;stroke-width:20;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-opacity:1;stroke-dasharray:none' d='M181 646.362v150h-75l150 150 150-150h-75v-150H181z' transform='translate(0 -540.362)'/%3E%3C/svg%3E");
-        }
-
-        .kinopoisk-jackett-button_watch::before {
-            content: "";
-            display: inline-block;
-            width: 0;
-            height: 0;
-
-            border-color: transparent;
-            border-left-color: #fff;
-            border-style: solid;
-            border-width: 10px 0 10px 18px;
         }
     `;
 
@@ -281,18 +268,10 @@
 		);
 		$downloadButton.title = "Скачать";
 
-		let $watchButton = document.createElement("a");
-		$watchButton.classList.add(
-			"kinopoisk-jackett-button",
-			"kinopoisk-jackett-button_watch",
-		);
-		$watchButton.title = "Смотреть";
-
 		let updateUIForResult = (result) => {
 			let torrentUrl = getTorrentUrlForResult(result);
 			$linkButton.href = result.Details;
 			$downloadButton.href = torrentUrl;
-			$watchButton.href = WATCH_URL_PREFIX + torrentUrl;
 		};
 
 		let $select = document.createElement("select");
@@ -310,7 +289,6 @@
 		});
 
 		updateUIForResult(results[0]);
-		$container.prepend($watchButton);
 		$container.prepend($downloadButton);
 		$container.prepend($linkButton);
 		$container.prepend($select);
