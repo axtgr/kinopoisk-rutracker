@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Kinopoisk RuTracker
 // @namespace    http://tampermonkey.net/
-// @version      0.1.2
+// @version      0.2.0
 // @description  Search movies and series from Kinopoisk on RuTracker and download them
 // @author       axtgr
 // @match        https://www.kinopoisk.ru/*
