@@ -283,7 +283,7 @@
 		results.forEach((result, i) => {
 			let $option = document.createElement("option");
 			$option.value = i;
-			$option.textContent = `(${result.Tracker}, ${bytesToGB(result.Size).toFixed(2)}gb, ${result.Seeders}s) ${result.Title}`;
+			$option.textContent = `(${bytesToGB(result.Size).toFixed(2)}gb, ${result.Seeders}s) ${result.Title}`;
 			$select.appendChild($option);
 		});
 
