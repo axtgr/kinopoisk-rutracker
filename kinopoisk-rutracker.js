@@ -75,7 +75,7 @@
 	const FORUM_IDS = new Set([...MOVIE_FORUM_IDS, ...SERIES_FORUM_IDS]);
 
 	const STYLES = `
-        #kinopoisk-jackett-container {
+        #kinopoisk-rutracker-container {
             display: flex;
             align-items: center;
             margin: 20px 0;
@@ -83,7 +83,7 @@
             font: 14px/1.4 Graphik Kinopoisk LC Web,Arial,Tahoma,Verdana,sans-serif;
         }
 
-        #kinopoisk-jackett-select {
+        #kinopoisk-rutracker-select {
             width: 100%;
             height: 44px;
             padding: 0 13px;
@@ -92,7 +92,7 @@
             font: 14px/1 Graphik Kinopoisk LC Web,Arial,Tahoma,Verdana,sans-serif;
         }
 
-        .kinopoisk-jackett-button {
+        .kinopoisk-rutracker-button {
             display: inline-block;
             box-sizing: border-box;
             height: 44px;
@@ -105,22 +105,22 @@
             transition: background-color 0.12s;
         }
 
-        .kinopoisk-jackett-button:hover {
+        .kinopoisk-rutracker-button:hover {
             background-color: rgb(240, 92, 0);
         }
 
-        .kinopoisk-jackett-button:last-child {
+        .kinopoisk-rutracker-button:last-child {
             padding-right: 32px;
             padding-left: 20px;
             border-right: 0;
             border-radius: 0 52px 52px 0;
         }
 
-        .kinopoisk-jackett-button_link {
+        .kinopoisk-rutracker-button_link {
             background-image: url("data:image/svg+xml,%3Csvg height='22' width='22' viewBox='0 0 141.732 151.732' style='fill:%23fff;stroke:%23fff;stroke-width:5;' xml:space='preserve' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M57.217 63.271 20.853 99.637c-4.612 4.608-7.15 10.738-7.15 17.259 0 6.524 2.541 12.653 7.151 17.261a24.265 24.265 0 0 0 17.259 7.15h.002c6.52 0 12.648-2.54 17.257-7.15L91.738 97.79c7.484-7.484 9.261-18.854 4.573-28.188l-7.984 7.985a14.193 14.193 0 0 1-3.831 12.957l-37.28 37.277-.026-.023a14.411 14.411 0 0 1-9.527 3.579c-3.768 0-7.295-1.453-9.937-4.092-2.681-2.68-4.13-6.259-4.093-10.078a14.449 14.449 0 0 1 3.584-9.39l-.021-.02.511-.515a6.86 6.86 0 0 1 .206-.211c.021-.021.043-.044.064-.062l.123-.125 36.364-36.366a14.07 14.07 0 0 1 10.008-4.144c.977 0 1.947.101 2.899.298l7.993-7.995a24.422 24.422 0 0 0-10.889-2.554 24.26 24.26 0 0 0-17.258 7.148m70.592-38.934c0-6.52-2.541-12.65-7.15-17.258-4.61-4.613-10.74-7.151-17.261-7.151a24.237 24.237 0 0 0-17.257 7.151L49.774 43.442c-7.479 7.478-9.26 18.84-4.585 28.17l7.646-7.646c-.877-4.368.358-8.964 3.315-12.356l-.021-.022.502-.507.201-.206.062-.06.126-.127 36.363-36.364a14.068 14.068 0 0 1 10.014-4.147c3.784 0 7.339 1.472 10.014 4.147 5.522 5.521 5.522 14.51 0 20.027L76.138 71.629l-.026-.026a14.411 14.411 0 0 1-9.526 3.581c-.951 0-1.891-.094-2.814-.278l-7.645 7.645a24.442 24.442 0 0 0 10.907 2.563c6.523 0 12.652-2.539 17.261-7.148l36.365-36.365c4.61-4.613 7.149-10.742 7.149-17.264'/%3E%3C/svg%3E");
         }
 
-        .kinopoisk-jackett-button_download {
+        .kinopoisk-rutracker-button_download {
             background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 512 512'%3E%3Cpath style='fill:%23fff;fill-opacity:1;stroke:%23fff;stroke-width:20;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-opacity:1;stroke-dasharray:none' d='M181 646.362v150h-75l150 150 150-150h-75v-150H181z' transform='translate(0 -540.362)'/%3E%3C/svg%3E");
         }
     `;
@@ -182,7 +182,7 @@
 	}
 
 	function removeUi() {
-		let $container = document.getElementById("kinopoisk-jackett-container");
+		let $container = document.getElementById("kinopoisk-rutracker-container");
 		if ($container) $container.remove();
 	}
 
@@ -208,7 +208,7 @@
 		let $parent = findMountParent($heading);
 		if (!$parent) return null;
 
-		let $existing = document.getElementById("kinopoisk-jackett-container");
+		let $existing = document.getElementById("kinopoisk-rutracker-container");
 		if ($existing && $existing.dataset.pageKey === key && $parent.contains($existing)) {
 			return $existing;
 		}
@@ -216,7 +216,7 @@
 		removeUi();
 
 		let $container = document.createElement("div");
-		$container.id = "kinopoisk-jackett-container";
+		$container.id = "kinopoisk-rutracker-container";
 		$container.dataset.filmId = id;
 		$container.dataset.pageKey = key;
 		$container.style.color = getComputedStyle($heading).color;
@@ -256,15 +256,15 @@
 
 		let $linkButton = document.createElement("a");
 		$linkButton.classList.add(
-			"kinopoisk-jackett-button",
-			"kinopoisk-jackett-button_link",
+			"kinopoisk-rutracker-button",
+			"kinopoisk-rutracker-button_link",
 		);
 		$linkButton.title = "Открыть раздачу";
 
 		let $downloadButton = document.createElement("a");
 		$downloadButton.classList.add(
-			"kinopoisk-jackett-button",
-			"kinopoisk-jackett-button_download",
+			"kinopoisk-rutracker-button",
+			"kinopoisk-rutracker-button_download",
 		);
 		$downloadButton.title = "Скачать";
 
@@ -275,7 +275,7 @@
 		};
 
 		let $select = document.createElement("select");
-		$select.id = "kinopoisk-jackett-select";
+		$select.id = "kinopoisk-rutracker-select";
 		$select.onchange = () => {
 			let result = results[$select.value];
 			updateUIForResult(result);
@@ -1023,7 +1023,7 @@
 
 		let filmId = page.id;
 		let pageKey = getPageKey(page);
-		let existing = document.getElementById("kinopoisk-jackett-container");
+		let existing = document.getElementById("kinopoisk-rutracker-container");
 		if (existing && existing.dataset.pageKey === pageKey) return;
 
 		let generation = ++runGeneration;
