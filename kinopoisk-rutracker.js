@@ -23,7 +23,6 @@
 	"use strict";
 
 	const RUTRACKER_HOST = "https://rutracker.org";
-	const RUTRACKER_API = "https://api.t-ru.org/v1";
 	const MIN_SIZE_GB = 4;
 	const MAX_SIZE_GB = 10;
 	const SERIES_MIN_SIZE_GB = 3;
@@ -578,52 +577,6 @@
 		return results;
 	}
 
-	function buildMagnet(infoHash, title) {
-		let trackers = ["", "2", "3", "4"]
-			.map(
-				(n) => `tr=${encodeURIComponent(`http://bt${n}.t-ru.org/ann?magnet`)}`,
-			)
-			.join("&");
-
-		return `magnet:?xt=urn:btih:${infoHash}&${trackers}&dn=${encodeURIComponent(title)}`;
-	}
-
-	async function enrichWithMagnets(results, reportStatus) {
-		if (results.length === 0) return results;
-
-		let ids = results.map((result) => result.TopicId);
-		let url = `${RUTRACKER_API}/get_tor_topic_data?by=topic_id&val=${ids.join(",")}`;
-
-		try {
-			if (reportStatus) reportStatus("Получение magnet-ссылок…");
-			const res = await gmRequest(url);
-			console.log("Kinopoisk RuTracker: API response", res);
-
-			if (res.status && res.status !== 200) return results;
-
-			let data = JSON.parse(res.responseText);
-			let topics = data && data.result;
-			if (!topics) return results;
-
-			return results.map((result) => {
-				let topic = topics[result.TopicId];
-				if (!topic || !topic.info_hash) return result;
-
-				let magnet = buildMagnet(topic.info_hash, result.Title);
-
-				return {
-					...result,
-					Size: topic.size || result.Size,
-					MagnetUri: magnet,
-					Link: magnet,
-				};
-			});
-		} catch (e) {
-			console.log("Kinopoisk RuTracker: API enrich failed", e);
-			return results;
-		}
-	}
-
 	function waitForTrackerPage(timeoutMs) {
 		return new Promise((resolve, reject) => {
 			if (isReadyTrackerDocument(document)) {
@@ -889,7 +842,7 @@
 		let payload = await fetchSearchPayload(url, reportStatus);
 		if (payload.error) throw new Error(payload.error);
 
-		return enrichWithMagnets(payload.results || [], reportStatus);
+		return payload.results;
 	}
 
 	function titleMatchesSeason(title, season) {
